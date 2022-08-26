@@ -34,6 +34,7 @@
 
 #include "attack/attack.h"
 #include "attack/join.h"
+#include "attack/ping.h"
 #include "attack/tcphit.h"
 #include "byte_buffer.h"
 #include "netutils.h"
@@ -195,6 +196,8 @@ void connectProxy(uv_loop_t* loop) {
     attack = new JoinAttack(protocol, ip, port);
   } else if (strcmp(argv[2], "tcphit") == 0) {
     attack = new TcpHitAttack(protocol);
+  } else if (strcmp(argv[2], "ping") == 0) {
+    attack = new PingAttack(protocol, ip, port);
   } else {
     std::cout << argv[2] << " из нот а валид аттак!1!!" << std::endl;
     exit(-1);
