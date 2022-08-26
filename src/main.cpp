@@ -25,6 +25,7 @@
 #include <csignal>
 #include <cstring>
 #include <fstream>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <random>
@@ -41,10 +42,16 @@ std::vector<sockaddr_in*> proxies;
 int current = 0;
 std::mutex proxyMutex;
 std::string proxiesPath;
+sockaddr_in* serverAddr;
 
 ByteBuffer proxyConnect;
 int protocol;
 Attack* attack;
+
+std::function<void(uv_loop_t*)> connectFn;
+
+void connectDirect(uv_loop_t*);
+void connectProxy(uv_loop_t*);
 
 #define CLOSE_CALLBACK [](uv_handle_t* h) {                \
   std::cout << "Дисконнектед фром зе сервер" << std::endl; \
@@ -72,8 +79,12 @@ void loadProxies() {
   std::ifstream proxiesFile(proxiesPath);
   if (!proxiesFile.good()) {
     std::cerr << "Каннот рид проксиес фром файл " << proxiesPath << std::endl;
-    exit(-1);
+    std::cerr << "Юзинг директ коннектион" << std::endl;
+    proxies.clear();
+    connectFn = connectDirect;
+    return;
   }
+  connectFn = connectProxy;
   std::string s;
   while (getline(proxiesFile, s)) {
     std::string proxyIp;
@@ -92,7 +103,28 @@ void loadProxies() {
                std::default_random_engine {std::random_device {}()});
 }
 
-void connect(uv_loop_t* loop) {
+void connectDirect(uv_loop_t* loop) {
+  auto* psock = (uv_tcp_t*) malloc(sizeof(uv_tcp_t));
+  uv_tcp_init(loop, psock);
+
+  auto* conn = (uv_connect_t*) malloc(sizeof(uv_connect_t));
+
+  uv_tcp_connect(conn, psock,
+                 (const sockaddr*) serverAddr, [](uv_connect_t* con, int s) {
+                   if (s < 0) {
+                     return;
+                   }
+                   //                   std::cout << "Коннектед ту зе сервер" << std::endl;
+
+                   uv_stream_t* stream = con->handle;
+                   free(con);
+
+                   attack->accept(stream, (const sockaddr_in*) stream->data);
+                   uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
+                 });
+}
+
+void connectProxy(uv_loop_t* loop) {
   proxyMutex.lock();
   if (current >= proxies.size()) {
     current = 0;
@@ -170,8 +202,14 @@ void connect(uv_loop_t* loop) {
 
   std::cout << ip << " " << port << std::endl;
 
+  serverAddr = (sockaddr_in*) malloc(sizeof(sockaddr_in));
+  uv_ip4_addr(ip.c_str(), port, serverAddr);
+
   loadProxies();
   std::cout << "Лоадед " << proxies.size() << " говнопрксиес" << std::endl;
+  if (proxies.empty()) {
+    std::cerr << "Варнинг! Зер ар но проксиез! Ботс вилл коннект директли!1!!" << std::endl;
+  }
 
   /*
    * +----+----+----+----+----+----+----+----+----+----+....+----+
@@ -199,11 +237,12 @@ void connect(uv_loop_t* loop) {
     uv_loop_init(loop);
 
     std::thread([=]() {
-      while (!uv_loop_alive(loop));
+      while (!uv_loop_alive(loop))
+        ;
 
       auto* async = (uv_async_t*) malloc(sizeof(uv_async_t));
       uv_async_init(loop, async, [](uv_async_t* async) {
-        connect(async->loop);
+        connectFn(async->loop);
       });
 
       while (uv_loop_alive(loop)) {
@@ -214,7 +253,7 @@ void connect(uv_loop_t* loop) {
     }).detach();
 
     std::thread([=]() {
-      connect(loop);
+      connectFn(loop);
 
       uv_run(loop, UV_RUN_DEFAULT);
       uv_loop_close(loop);
