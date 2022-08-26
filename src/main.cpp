@@ -236,32 +236,35 @@ void connectProxy(uv_loop_t* loop) {
   signal(SIGPIPE, SIG_IGN);// Ignore SIGPIPE
 
   for (int i = 0; i < loopCnt; i++) {
-    auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
-    uv_loop_init(loop);
+    auto* async = (uv_async_t*) malloc(sizeof(uv_async_t));
 
     std::thread([=]() {
-      while (!uv_loop_alive(loop))
-        ;
+      auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
 
-      auto* async = (uv_async_t*) malloc(sizeof(uv_async_t));
-      uv_async_init(loop, async, [](uv_async_t* async) {
-        connectFn(async->loop);
-      });
+      uv_loop_init(loop);;
 
-      while (uv_loop_alive(loop)) {
-        uv_async_send(async);
+      while (true) {
+        connectFn(loop);
+        uv_run(loop, UV_RUN_DEFAULT);
       }
 
-      free(async);
+//      uv_async_init(loop, async, [](uv_async_t* async) {
+//        connectFn(async->loop);
+//      });
+//      async->data = serverAddr;
+
+//      uv_loop_close(loop);
+//      free(async);
+//      free(loop);
     }).detach();
 
-    std::thread([=]() {
-      connectFn(loop);
-
-      uv_run(loop, UV_RUN_DEFAULT);
-      uv_loop_close(loop);
-      free(loop);
-    }).detach();
+//    std::thread([=]() {
+//      while (async->data != serverAddr);
+//
+//      while (true) {
+//        connectFn(async->loop);
+//      }
+//    }).detach();
   }
 
   while (true)
