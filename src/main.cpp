@@ -243,7 +243,14 @@ void connectProxy(uv_loop_t* loop) {
       auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
       uv_loop_init(loop);
       connectFn(loop);
-      uv_run(loop, UV_RUN_DEFAULT);
+
+      std::thread([=]() {
+        uv_run(loop, UV_RUN_DEFAULT);
+      }).detach();
+
+      while (uv_loop_alive(loop)) {
+        connectFn(loop);
+      }
     }).detach();
   }
 
