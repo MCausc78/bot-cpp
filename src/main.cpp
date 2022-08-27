@@ -248,8 +248,12 @@ void connectProxy(uv_loop_t* loop) {
         uv_run(loop, UV_RUN_DEFAULT);
       }).detach();
 
+      auto* async = (uv_async_t*) malloc(sizeof(uv_async_t));
+      uv_async_init(loop, async, [](uv_async_t* async) {
+        connectFn(async->loop);
+      });
       while (uv_loop_alive(loop)) {
-        connectFn(loop);
+        uv_async_send(async);
       }
     }).detach();
   }
