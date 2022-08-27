@@ -48,6 +48,7 @@ sockaddr_in* serverAddr;
 ByteBuffer proxyConnect;
 int protocol;
 Attack* attack;
+int totalConnections = 0;
 
 std::function<void(uv_loop_t*)> connectFn;
 
@@ -55,7 +56,6 @@ void connectDirect(uv_loop_t*);
 void connectProxy(uv_loop_t*);
 
 #define CLOSE_CALLBACK [](uv_handle_t* h) {                \
-  std::cout << "Дисконнектед фром зе сервер" << std::endl; \
   free(h);                                                 \
 }
 
@@ -121,6 +121,7 @@ void connectDirect(uv_loop_t* loop) {
                    uv_stream_t* stream = con->handle;
                    free(con);
 
+                   totalConnections++;
                    attack->accept(stream, (const sockaddr_in*) stream->data);
                    uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
                  });
@@ -166,11 +167,12 @@ void connectProxy(uv_loop_t* loop) {
                            uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
                          } else {
                            if (b->base[1] != 90) {
-                             std::cerr << "Реквест хас бин режектед бай прокси сервер виз коде " << (int) b->base[1] << std::endl;
+//                             std::cerr << "Реквест хас бин режектед бай прокси сервер виз коде " << (int) b->base[1] << std::endl;
                              auto* dstAddr = (sockaddr_in*) stream->data;
                              DELETE_GOVNOPROXY
                              uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
                            } else {
+                             totalConnections++;
                              attack->accept(stream, (const sockaddr_in*) stream->data);
                              uv_close((uv_handle_t*) stream, CLOSE_CALLBACK);
                            }
@@ -258,6 +260,13 @@ void connectProxy(uv_loop_t* loop) {
     }).detach();
   }
 
-  while (true)
-    ;
+  long time = 0;
+  while (true) {
+    using namespace std::chrono_literals;
+    std::this_thread::sleep_for(5s);
+    time += 5;
+    std::cout << "Total connections: " << totalConnections <<
+                 " | Time: " << time << "s" <<
+                 " | Avg CPS: " << ((float) totalConnections / (float) time) << std::endl;
+  }
 }
