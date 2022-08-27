@@ -62,7 +62,6 @@ void connectProxy(uv_loop_t*);
 #define DELETE_GOVNOPROXY                                                                             \
   char ip[22] {};                                                                                     \
   uv_ip4_name((sockaddr_in*) dstAddr, ip, sizeof(ip));                                                \
-  std::cerr << "Варнинг!11!! Говнопрокси воз фаунд: " << ip << ":" << dstAddr->sin_port << std::endl; \
   proxyMutex.lock();                                                                                  \
   auto govnoproxy = std::find(proxies.begin(), proxies.end(), dstAddr);                               \
   if (govnoproxy != proxies.end()) {                                                                  \
