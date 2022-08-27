@@ -112,6 +112,7 @@ void connectDirect(uv_loop_t* loop) {
 
   uv_tcp_connect(conn, psock,
                  (const sockaddr*) serverAddr, [](uv_connect_t* con, int s) {
+                   connectFn(con->handle->loop);
                    if (s < 0) {
                      return;
                    }
@@ -140,6 +141,8 @@ void connectProxy(uv_loop_t* loop) {
   conn->data = dstAddr;
   uv_tcp_connect(conn, psock,
                  (const sockaddr*) dstAddr, [](uv_connect_t* con, int s) {
+                   connectFn(con->handle->loop);
+
                    auto* dstAddr = (sockaddr_in*) con->data;
                    if (s < 0) {
                      DELETE_GOVNOPROXY
@@ -238,13 +241,9 @@ void connectProxy(uv_loop_t* loop) {
   for (int i = 0; i < loopCnt; i++) {
     std::thread([=]() {
       auto* loop = (uv_loop_t*) malloc(sizeof(uv_loop_t));
-
-      uv_loop_init(loop);;
-
-      while (true) {
-        connectFn(loop);
-        uv_run(loop, UV_RUN_DEFAULT);
-      }
+      uv_loop_init(loop);
+      connectFn(loop);
+      uv_run(loop, UV_RUN_DEFAULT);
     }).detach();
   }
 
